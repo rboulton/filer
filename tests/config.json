@@ -21,6 +21,6 @@
     ]
   },
   "db": {
-    "dir": "~/.filer"
+    "dir": ".test/db"
   }
 }

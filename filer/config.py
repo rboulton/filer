@@ -34,11 +34,7 @@ def load_config_from_path(path):
     exclude_patterns = excludes.pop("patterns", [])
 
     db_config = data.pop("db", {})
-    db_dir = os.path.expanduser(db_config.pop("path", "~/.filer"))
-    if not os.path.isabs(db_dir):
-        raise ValueError(
-            "Database directory must be an absolute path: got {}".format(db_dir)
-        )
+    db_dir = os.path.abspath(os.path.expanduser(db_config.pop("dir", "~/.filer")))
 
     if len(data) != 0:
         print(
