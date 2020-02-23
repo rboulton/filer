@@ -1,0 +1,26 @@
+{
+  "roots": [
+    "/"
+  ],
+  "exclude": {
+    "paths": [
+      "/boot",
+      "/cdrom",
+      "/dev",
+      "/proc",
+      "/run",
+      "/snap",
+      "/tmp",
+      "/var"
+    ],
+    "directories": [
+      ".cache"
+    ],
+    "patterns": [
+      ".tmp$"
+    ]
+  },
+  "db": {
+    "path": "~/.filer"
+  }
+}
