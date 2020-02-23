@@ -21,17 +21,29 @@ Config = namedtuple(
 )
 
 
+def check_list_of_strings(data, name):
+    for item in data:
+        if not isinstance(item, str):
+            raise ValueError(
+                "Expected {} to be a list of strings, got {}".format(name, repr(data))
+            )
+
+
 def load_config_from_path(path):
     with open(path, "rb") as fobj:
         data = json.load(fobj)
 
     datadir = data.pop("datadir", None)
-    roots = data.pop("roots", "/")
+    roots = data.pop("roots", ["/",])
+    check_list_of_strings(roots, "roots")
 
     excludes = data.pop("exclude", {})
     exclude_paths = excludes.pop("paths", [])
+    check_list_of_strings(exclude_paths, "exclude.paths")
     exclude_directories = excludes.pop("directories", [])
+    check_list_of_strings(exclude_directories, "exclude.directories")
     exclude_patterns = excludes.pop("patterns", [])
+    check_list_of_strings(exclude_patterns, "exclude.patterns")
 
     db_config = data.pop("db", {})
     db_dir = os.path.abspath(os.path.expanduser(db_config.pop("dir", "~/.filer")))
