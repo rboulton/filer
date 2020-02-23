@@ -46,7 +46,7 @@ run: build
 build: $(REQUIREMENTS_STAMPFILE)
 
 clean:
-	rm -rf .venv
+	rm -rf .venv .test
 
 format: $(DEV_REQUIREMENTS_STAMPFILE)
 	.venv/bin/black -t py36 filer
