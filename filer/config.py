@@ -17,7 +17,14 @@ CONFIG_PATHS = [
 
 Config = namedtuple(
     "Config",
-    ["roots", "exclude_paths", "exclude_directories", "exclude_patterns", "db_dir"],
+    [
+        "roots",
+        "exclude_paths",
+        "exclude_directories",
+        "exclude_patterns",
+        "db_dir",
+        "settle_time",
+    ],
 )
 
 
@@ -48,6 +55,9 @@ def load_config_from_path(path):
     db_config = data.pop("db", {})
     db_dir = os.path.abspath(os.path.expanduser(db_config.pop("dir", "~/.filer")))
 
+    times = data.pop("times", {})
+    settle_time = max(float(times.pop("settle", 30.0)), 0.0)
+
     if len(data) != 0:
         print(
             "Warning: unknown config items: {}".format(repr(data.keys())),
@@ -63,8 +73,20 @@ def load_config_from_path(path):
             "Warning: unknown exclude items: {}".format(repr(db_config.keys())),
             file=sys.stderr,
         )
+    if len(times) != 0:
+        print(
+            "Warning: unknown times items: {}".format(repr(times.keys())),
+            file=sys.stderr,
+        )
 
-    return Config(roots, exclude_paths, exclude_directories, exclude_patterns, db_dir)
+    return Config(
+        roots,
+        exclude_paths,
+        exclude_directories,
+        exclude_patterns,
+        db_dir,
+        settle_time,
+    )
 
 
 def load_config():

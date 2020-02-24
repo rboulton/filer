@@ -17,10 +17,13 @@
       ".cache"
     ],
     "patterns": [
-      ".tmp$"
+      "\\.tmp$"
     ]
   },
   "db": {
     "dir": ".test/db"
+  },
+  "times": {
+    "settle": 30
   }
 }

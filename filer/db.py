@@ -33,20 +33,63 @@ def init_schema(connection):
         create table if not exists files (
           hash text,
           path text,
+          mtime integer,
           first_observed integer,
           deleted_before integer
         );
         """,
         """
-        create index if not exists file_hashes on files (
+        create index if not exists current_file_hashes on files (
           hash,
           path,
-          first_observed,
-          deleted_before
-        );
+          mtime
+        ) where deleted_before is null;
     """,
     ):
         cursor.execute(sql)
 
     cursor.close()
     connection.commit()
+
+def get_current_file_data(connection, paths):
+    cursor = connection.cursor()
+    try:
+        args = ", ".join(["?"] * len(paths))
+        cursor.execute("""
+        select hash, path, mtime
+        from files
+        where path in ({})
+        and deleted_before is null
+        """.format(args), paths)
+        return cursor.fetchmany()
+    finally:
+        cursor.close()
+
+def update_file_data(connection, new_hash, path, mtime, now):
+    cursor = connection.cursor()
+    try:
+        cursor.execute("""
+            select rowid, hash, mtime, first_observed
+            from files
+            where path = ?
+            and deleted_before is null
+        """, (path, ))
+        rows = cursor.fetchmany()
+        if len(rows) > 0:
+            assert len(rows) == 1
+            rowid, old_hash, old_mtime, old_first_observed = rows[0]
+            if old_hash == new_hash and old_mtime == mtime:
+                print("Nothing to change")
+                return
+
+            cursor.execute("""
+                replace into files (rowid, hash, path, mtime, first_observed)
+                values(?, ?, ?, ?, ?)
+            """, (rowid, new_hash, path, mtime, old_first_observed))
+        else:
+            cursor.execute("""
+                insert into files (hash, path, mtime, first_observed)
+                values(?, ?, ?, ?)
+            """, (new_hash, path, mtime, now))
+    finally:
+        cursor.close()

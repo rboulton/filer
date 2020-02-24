@@ -1,6 +1,6 @@
 {
   "roots": [
-    "/"
+    "/home/richard/test"
   ],
   "exclude": {
     "paths": [
@@ -17,10 +17,13 @@
       ".cache"
     ],
     "patterns": [
-      ".tmp$"
+      "\\.tmp$"
     ]
   },
   "db": {
     "dir": "~/.filer"
+  },
+  "times": {
+    "settle": 30
   }
 }
