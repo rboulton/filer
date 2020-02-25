@@ -18,6 +18,7 @@ CONFIG_PATHS = [
 Config = namedtuple(
     "Config",
     [
+        "config_path",
         "roots",
         "exclude_paths",
         "exclude_directories",
@@ -80,6 +81,7 @@ def load_config_from_path(path):
         )
 
     return Config(
+        path,
         roots,
         exclude_paths,
         exclude_directories,
@@ -91,7 +93,7 @@ def load_config_from_path(path):
 
 def load_config():
     for path in CONFIG_PATHS:
-        path = os.path.abspath(path)
+        path = os.path.realpath(os.path.abspath(path))
         if not os.path.isfile(path):
             continue
         return load_config_from_path(path)
@@ -100,6 +102,10 @@ def load_config():
             "No configuration file found: checked {}".format(", ".join(CONFIG_PATHS)),
             file=sys.stderr,
         )
+
+
+def config_paths():
+    return [os.path.abspath(path) for path in CONFIG_PATHS]
 
 
 config = load_config()
