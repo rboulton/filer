@@ -41,7 +41,7 @@ test: build $(DEV_REQUIREMENTS_STAMPFILE)
 	$(VENV_PYTEST) filer
 
 run: build
-	$(VENV_PYTHON) filer/walker.py
+	$(VENV_PYTHON) filer.py
 
 build: $(REQUIREMENTS_STAMPFILE)
 
