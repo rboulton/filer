@@ -6,7 +6,7 @@ import stat
 import subprocess
 import time
 
-import db
+from . import db
 
 
 REGULAR_FILE = 1
@@ -24,7 +24,9 @@ class Walker:
         db.init_schema(self.db_conn)
         self.batch_size = 1000
         self.batch_timeout = 10
-        self.revisit_queue = []  # arranged as a heap
+
+    def log(self, message):
+        print(message)
 
     def find_swapfiles(self):
         result = subprocess.run(
@@ -34,11 +36,8 @@ class Walker:
             return []
         return result.stdout.decode("utf8").strip().split("\n")
 
-    def schedule_revisit(self, path, visit_time):
-        heapq.heappush(self.revisit_queue, (visit_time, path))
-
     def calc_hash(self, path):
-        print(path)
+        # self.log("Calculating hash of {}".format(path))
         try:
             h = hashlib.sha512()
             with open(path, "rb") as fobj:
@@ -49,41 +48,54 @@ class Walker:
                     h.update(d)
             return h.hexdigest()
         except PermissionError as e:
-            print("PermissionError calculating hash - skipping")
+            self.log("PermissionError calculating hash for {} - skipping".format(path))
             return None
 
     def visit_files(self, batch):
         stored_data = {
             path: (stored_hash, stored_mtime)
-            for stored_hash, path, stored_mtime in db.get_current_file_data(self.db_conn, [
-                path for path, stored_mtime in batch
-            ])
+            for stored_hash, path, stored_mtime in db.get_current_file_data(
+                self.db_conn, [path for path, _ in batch]
+            )
         }
         for path, mtime in batch:
             stored = stored_data.get(path)
+            now = time.time()
+
             old_hash = None
             if stored:
                 if stored[1] == mtime:
+                    # No change since last visit
+                    db.record_visit(self.db_conn, path)
                     continue
+                self.log("stored timestamp for {} different from new timestamp: {} {}".format(path, repr(stored[1]), mtime))
                 old_hash = stored[0]
+
+            settled_time = mtime + self.config.settle_time
+            if now < settled_time:
+                # Changed more recently than settle_time
+                self.log("file {} changed recently - will revisit after {}".format(path, settled_time - time.time()))
+                db.record_visit(self.db_conn, path, settled_time)
+                continue
 
             new_hash = self.calc_hash(path)
             if new_hash is None:
-                # Couldn't hash it - drop this file
+                # Couldn't hash it - drop this file (don't record a visit to it)
                 continue
 
             new_mtime = int(os.path.getmtime(path))
             if new_mtime != mtime:
-                # Changed time since we started calculating the hash
-                schedule_revisit(path, new_mtime + self.config.settle_time)
+                # Changed since we started calculating the hash - revisit when it might have settled
+                db.record_visit(self.db_conn, path, new_mtime + self.config.settle_time)
             else:
-                now = time.time()
+                # print("updating {} {} {}".format(path, mtime, now))
                 db.update_file_data(self.db_conn, new_hash, path, mtime, now)
+                db.record_visit(self.db_conn, path)
         self.db_conn.commit()
 
     def visit_symlinks(self, batch):
         for path, mtime in batch:
-            print("S", path, mtime)
+            self.log("symlink {} mtime={}".format(path, mtime))
 
     def listen(self):
         """Listen for updates
@@ -98,17 +110,18 @@ class Walker:
         symlink_batch_time = None
 
         seen = 0
-        for path, type, stats in self.iter_items():
+        for item in self.iter_items():
+            if item is None:
+               continue
+            path, type, stats = item
             now = time.time()
             seen += 1
-            print(seen)
+            # print(seen, path)
             if path is not None:
                 mtime = int(stats.st_mtime)
                 modified_ago = now - mtime
 
-                if modified_ago < self.config.settle_time:
-                    self.schedule_revisit(path, mtime + self.config.settle_time)
-                elif type == REGULAR_FILE:
+                if type == REGULAR_FILE:
                     file_batch.append((path, mtime))
                     if file_batch_time is None:
                         file_batch_time = time.time() + self.batch_timeout
@@ -117,7 +130,6 @@ class Walker:
                     if symlink_batch_time is None:
                         symlink_batch_time = time.time() + self.batch_timeout
 
-            print(len(file_batch), file_batch_time, now)
             if len(file_batch) > self.batch_size or (
                 file_batch_time is not None and file_batch_time < now
             ):
@@ -164,7 +176,6 @@ class Walker:
         Applies the exclusions from the config.
 
         """
-
         def to_yield(path, stats):
             if stat.S_ISREG(stats.st_mode):
                 return path, REGULAR_FILE, stats
@@ -172,48 +183,54 @@ class Walker:
                 return path, SYMLINK, stats
             return None
 
+        def check_visit(base, dirs, files, basefd):
+            skip = []
+            for dirname in dirs:
+                d_path = os.path.normpath(
+                    os.path.realpath(os.path.join(base, dirname))
+                )
+                if self.check_skip_dir(d_path, dirname):
+                    skip.append(dirname)
+
+            for dirname in skip:
+                self.log("Skipping {}".format(dirname))
+                dirs.remove(dirname)
+
+            for name in files:
+                f_path = os.path.normpath(
+                    os.path.realpath(os.path.join(base, name))
+                )
+
+                if self.check_skip_file(f_path):
+                    self.log("Skipping {}".format(f_path))
+                    continue
+
+                stats = os.stat(name, dir_fd=basefd, follow_symlinks=False)
+                yield to_yield(f_path, stats)
+
+        db.clear_visits(self.db_conn)
+
         for root in self.config.roots:
-            for base, dirs, files, basefd in os.fwalk(root, follow_symlinks=False):
-                skip = []
-                for dirname in dirs:
-                    d_path = os.path.normpath(
-                        os.path.realpath(os.path.join(base, dirname))
-                    )
-                    if self.check_skip_dir(d_path, dirname):
-                        skip.append(dirname)
-
-                for dirname in skip:
-                    print("Skipping {}".format(dirname))
-                    dirs.remove(dirname)
-
-                for name in files:
-                    f_path = os.path.normpath(
-                        os.path.realpath(os.path.join(base, name))
-                    )
-
-                    if self.check_skip_file(f_path):
-                        print("Skipping {}".format(f_path))
-                        continue
-
-                    stats = os.stat(name, dir_fd=basefd, follow_symlinks=False)
-                    y = to_yield(f_path, stats)
-                    if y:
+            self.log("Checking files under {}".format(root))
+            try:
+                for base, dirs, files, basefd in os.fwalk(root, follow_symlinks=False):
+                    for y in check_visit(base, dirs, files, basefd):
                         yield y
+            except FileNotFoundError as e:
+                self.log("File not found - aborting scan of root {}".format(root))
 
         while True:
             now = time.time()
-            if len(self.revisit_queue) > 0:
-                revisit_time = self.revisit_queue[0][0]
-                if now > revisit_time:
-                    _, path = heapq.heappop(self.revisit_queue)
-                    stats = os.stat(path, follow_symlinks=False)
-                    y = to_yield(path, stats)
-                    if y:
-                        yield y
-                    continue
+            next_revisit_time, revisit_paths = db.due_for_revisit(self.db_conn, now)
+            self.log("Next revisit time: {} ({}s), due now: {}".format(next_revisit_time, (next_revisit_time or now) - now, len(revisit_paths)))
 
-            time.sleep(1)
-            yield None, None, None
+            for path in revisit_paths:
+                print("Revisit {}".format(path))
+                stats = os.stat(path, follow_symlinks=False)
+                yield to_yield(path, stats)
+            else:
+                time.sleep(1)
+            yield None
 
 
 if __name__ == "__main__":
