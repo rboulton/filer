@@ -84,7 +84,6 @@ def record_visit(connection, path, revisit_time=None):
 settled yet).
 
     """
-    print(path, revisit_time)
     cursor = connection.cursor()
     try:
         cursor.execute(

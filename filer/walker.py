@@ -74,8 +74,16 @@ class Walker:
             settled_time = mtime + self.config.settle_time
             if now < settled_time:
                 # Changed more recently than settle_time
-                self.log("file {} changed recently - will revisit after {}".format(path, settled_time - time.time()))
+                self.log("file {} changed recently - will revisit after {}s".format(path, settled_time - time.time()))
                 db.record_visit(self.db_conn, path, settled_time)
+                continue
+
+            # Check mtime again before we spend time calculating the hash
+            new_mtime = int(os.path.getmtime(path))
+            if new_mtime != mtime:
+                # Changed since we logged this as something to be visited - revisit again later.
+                self.log("file {} changed since we last looked at it - will revisit after {}s".format(path, new_mtime + self.config.settle_time - time.time()))
+                db.record_visit(self.db_conn, path, new_mtime + self.config.settle_time)
                 continue
 
             new_hash = self.calc_hash(path)
@@ -83,14 +91,16 @@ class Walker:
                 # Couldn't hash it - drop this file (don't record a visit to it)
                 continue
 
+            # Check mtime after hash calculated
             new_mtime = int(os.path.getmtime(path))
             if new_mtime != mtime:
                 # Changed since we started calculating the hash - revisit when it might have settled
                 db.record_visit(self.db_conn, path, new_mtime + self.config.settle_time)
-            else:
-                # print("updating {} {} {}".format(path, mtime, now))
-                db.update_file_data(self.db_conn, new_hash, path, mtime, now)
-                db.record_visit(self.db_conn, path)
+                continue
+
+            # print("updating {} {} {}".format(path, mtime, now))
+            db.update_file_data(self.db_conn, new_hash, path, mtime, now)
+            db.record_visit(self.db_conn, path)
         self.db_conn.commit()
 
     def visit_symlinks(self, batch):
@@ -104,9 +114,9 @@ class Walker:
         batches of either have been created.
 
         """
-        file_batch = []
+        file_batch = {}
         file_batch_time = None
-        symlink_batch = []
+        symlink_batch = {}
         symlink_batch_time = None
 
         seen = 0
@@ -116,35 +126,35 @@ class Walker:
             path, type, stats = item
             now = time.time()
             seen += 1
-            # print(seen, path)
             if path is not None:
                 mtime = int(stats.st_mtime)
                 modified_ago = now - mtime
 
                 if type == REGULAR_FILE:
-                    file_batch.append((path, mtime))
+                    file_batch[path] = mtime
                     if file_batch_time is None:
                         file_batch_time = time.time() + self.batch_timeout
                 elif type == SYMLINK:
-                    symlink_batch.append((path, mtime))
+                    symlink_batch[path] = mtime
                     if symlink_batch_time is None:
                         symlink_batch_time = time.time() + self.batch_timeout
 
+            print("File batch {}".format(len(file_batch)))
             if len(file_batch) > self.batch_size or (
                 file_batch_time is not None and file_batch_time < now
             ):
                 batch = file_batch
-                file_batch = []
+                file_batch = {}
                 file_batch_time = None
-                self.visit_files(batch)
+                self.visit_files(sorted(batch.items(), key=lambda x: (x[1], x[0])))
 
             if len(symlink_batch) > self.batch_size or (
                 symlink_batch_time is not None and symlink_batch_time < now
             ):
                 batch = symlink_batch
-                symlink_batch = []
+                symlink_batch = {}
                 symlink_batch_time = None
-                self.visit_symlinks(batch)
+                self.visit_symlinks(sorted(batch.items(), key=lambda x: (x[1], x[0])))
 
     def check_skip_dir(self, path, dirname):
         if path in self.config.exclude_paths:
