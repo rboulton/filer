@@ -5,6 +5,8 @@ import re
 import stat
 import subprocess
 import time
+import pyinotify
+import asyncio
 
 from . import db
 
@@ -24,6 +26,21 @@ class Walker:
         db.init_schema(self.db_conn)
         self.batch_size = 1000
         self.batch_timeout = 10
+        self.watch_manager = pyinotify.WatchManager()
+        self.watch_mask = pyinotify.ALL_EVENTS
+        self.watch_mask = (
+            pyinotify.IN_ATTRIB |
+            pyinotify.IN_ATTRIB |
+            pyinotify.IN_CREATE |
+            pyinotify.IN_DELETE |
+            pyinotify.IN_DELETE_SELF |
+            pyinotify.IN_MODIFY |
+            pyinotify.IN_MOVE_SELF |
+            pyinotify.IN_MOVED_FROM |
+            pyinotify.IN_MOVED_TO |
+            pyinotify.IN_DONT_FOLLOW |
+            pyinotify.IN_EXCL_UNLINK
+        )
 
     def log(self, message):
         print(message)
@@ -114,47 +131,54 @@ class Walker:
         batches of either have been created.
 
         """
-        file_batch = {}
-        file_batch_time = None
-        symlink_batch = {}
-        symlink_batch_time = None
+        self.file_batch = {}
+        self.file_batch_time = None
+        self.symlink_batch = {}
+        self.symlink_batch_time = None
 
-        seen = 0
-        for item in self.iter_items():
-            if item is None:
-               continue
-            path, type, stats = item
-            now = time.time()
-            seen += 1
-            if path is not None:
-                mtime = int(stats.st_mtime)
-                modified_ago = now - mtime
+        self.start_watching_roots()
+        self.poll_items()
 
-                if type == REGULAR_FILE:
-                    file_batch[path] = mtime
-                    if file_batch_time is None:
-                        file_batch_time = time.time() + self.batch_timeout
-                elif type == SYMLINK:
-                    symlink_batch[path] = mtime
-                    if symlink_batch_time is None:
-                        symlink_batch_time = time.time() + self.batch_timeout
 
-            print("File batch {}".format(len(file_batch)))
-            if len(file_batch) > self.batch_size or (
-                file_batch_time is not None and file_batch_time < now
-            ):
-                batch = file_batch
-                file_batch = {}
-                file_batch_time = None
-                self.visit_files(sorted(batch.items(), key=lambda x: (x[1], x[0])))
+    def process_change(self, path, stats):
+        if path is None:
+            return
 
-            if len(symlink_batch) > self.batch_size or (
-                symlink_batch_time is not None and symlink_batch_time < now
-            ):
-                batch = symlink_batch
-                symlink_batch = {}
-                symlink_batch_time = None
-                self.visit_symlinks(sorted(batch.items(), key=lambda x: (x[1], x[0])))
+        now = time.time()
+        mtime = int(stats.st_mtime)
+        modified_ago = now - mtime
+
+        if stat.S_ISREG(stats.st_mode):
+            self.file_batch[path] = mtime
+            if self.file_batch_time is None:
+                self.file_batch_time = now + self.batch_timeout
+        elif stat.S_ISLNK(stats.st_mode):
+            self.symlink_batch[path] = mtime
+            if self.symlink_batch_time is None:
+                self.symlink_batch_time = now + self.batch_timeout
+        else:
+            print("Unexpected change stats: {}".format(str(stats)))
+
+    def check_file_batch(self):
+        now = time.time()
+        print("File batch {}".format(len(self.file_batch)))
+        if len(self.file_batch) > self.batch_size or (
+            self.file_batch_time is not None and self.file_batch_time < now
+        ):
+            batch = self.file_batch
+            self.file_batch = {}
+            self.file_batch_time = None
+            self.visit_files(sorted(batch.items(), key=lambda x: (x[1], x[0])))
+
+    def check_symlink_batch(self):
+        now = time.time()
+        if len(self.symlink_batch) > self.batch_size or (
+            self.symlink_batch_time is not None and self.symlink_batch_time < now
+        ):
+            batch = self.symlink_batch
+            self.symlink_batch = {}
+            self.symlink_batch_time = None
+            self.visit_symlinks(sorted(batch.items(), key=lambda x: (x[1], x[0])))
 
     def check_skip_dir(self, path, dirname):
         if path in self.config.exclude_paths:
@@ -180,18 +204,25 @@ class Walker:
                     return True
         return False
 
-    def iter_items(self):
-        """Walks over the roots, yielding each file and symlink found.
+    def start_watching_roots(self):
+        """Walks over the roots, setting up watches and processing the items found.
+
+        Doesn't follow symlinks.
 
         Applies the exclusions from the config.
 
         """
-        def to_yield(path, stats):
-            if stat.S_ISREG(stats.st_mode):
-                return path, REGULAR_FILE, stats
-            elif stat.S_ISLNK(stats.st_mode):
-                return path, SYMLINK, stats
-            return None
+        db.clear_visits(self.db_conn)
+        for root in self.config.roots:
+            self.watch_tree(root)
+
+    def watch_tree(self, root):
+        self.log("Checking files under {}".format(root))
+        try:
+            for base, dirs, files, basefd in os.fwalk(root, follow_symlinks=False):
+                check_visit(base, dirs, files, basefd)
+        except FileNotFoundError as e:
+            self.log("File not found - aborting scan of root {}".format(root))
 
         def check_visit(base, dirs, files, basefd):
             skip = []
@@ -201,6 +232,8 @@ class Walker:
                 )
                 if self.check_skip_dir(d_path, dirname):
                     skip.append(dirname)
+                else:
+                    self.watch_manager.add_watch(d_path, self.watch_mask)
 
             for dirname in skip:
                 self.log("Skipping {}".format(dirname))
@@ -216,20 +249,13 @@ class Walker:
                     continue
 
                 stats = os.stat(name, dir_fd=basefd, follow_symlinks=False)
-                yield to_yield(f_path, stats)
 
-        db.clear_visits(self.db_conn)
+                self.process_change(f_path, stats)
+                self.check_file_batch()
+                self.check_symlink_batch()
 
-        for root in self.config.roots:
-            self.log("Checking files under {}".format(root))
-            try:
-                for base, dirs, files, basefd in os.fwalk(root, follow_symlinks=False):
-                    for y in check_visit(base, dirs, files, basefd):
-                        yield y
-            except FileNotFoundError as e:
-                self.log("File not found - aborting scan of root {}".format(root))
-
-        while True:
+    def poll_items(self):
+        async def do_revisits():
             now = time.time()
             next_revisit_time, revisit_paths = db.due_for_revisit(self.db_conn, now)
             self.log("Next revisit time: {} ({}s), due now: {}".format(next_revisit_time, (next_revisit_time or now) - now, len(revisit_paths)))
@@ -237,10 +263,22 @@ class Walker:
             for path in revisit_paths:
                 print("Revisit {}".format(path))
                 stats = os.stat(path, follow_symlinks=False)
-                yield to_yield(path, stats)
+                self.process_change(path, stats)
+                self.check_file_batch()
+                self.check_symlink_batch()
             else:
-                time.sleep(1)
-            yield None
+                await asyncio.sleep(1)
+
+
+        def process_event(event):
+            print("EVENT: {}".format(str(event)))
+
+        loop = asyncio.get_event_loop()
+        loop.create_task(do_revisits())
+        notifier = pyinotify.AsyncioNotifier(self.watch_manager, loop, default_proc_fun=process_event)
+        loop.run_forever()
+        notifier.stop()
+
 
 
 if __name__ == "__main__":
