@@ -63,6 +63,7 @@ def init_schema(connection):
     cursor.close()
     connection.commit()
 
+
 def clear_visits(connection):
     """Clear the visits table.
 
@@ -76,6 +77,7 @@ def clear_visits(connection):
         cursor.execute("delete from visits;")
     finally:
         cursor.close()
+
 
 def record_visit(connection, path, revisit_time=None):
     """Record a visit to a path.
@@ -96,6 +98,7 @@ settled yet).
     finally:
         cursor.close()
 
+
 def due_for_revisit(connection, now):
     """Return a list of some paths which are due a revisit, or a time that some
     will become available
@@ -105,24 +108,29 @@ def due_for_revisit(connection, now):
     revisits = []
     cursor = connection.cursor()
     try:
-        cursor.execute("""
+        cursor.execute(
+            """
             select path, revisit_time
             from visits
             where revisit_time is not null
             order by revisit_time asc
             limit 1000
-        """)
+        """
+        )
         items = cursor.fetchall()
 
         if len(items) == 0:
             return None, ()
-        due = [
-            path
-            for path, revisit_time in items
-            if revisit_time < now
+        due = [path for path, revisit_time in items if revisit_time <= now]
+        not_due_times = [
+            revisit_time for path, revisit_time in items if revisit_time > now
         ]
+        if len(not_due_times) > 0:
+            next_revisit_time = min(not_due_times)
+        else:
+            next_revisit_time = None
         if len(due) > 0:
-            return None, due
+            return next_revisit_time, due
         return items[0][1], ()
     finally:
         cursor.close()
