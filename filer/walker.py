@@ -78,11 +78,17 @@ class Walker:
                 self.db_conn, [path for path, _ in batch]
             )
         }
+        deletes = set()
+
         for path, mtime in batch:
-            stored = stored_data.get(path)
+            if mtime is None:
+                deletes.add(path)
+                continue
+
             now = time.time()
 
             old_hash = None
+            stored = stored_data.get(path)
             if stored:
                 if stored[1] == mtime:
                     # No change since last visit
@@ -108,7 +114,12 @@ class Walker:
                 continue
 
             # Check mtime again before we spend time calculating the hash
-            new_mtime = int(os.path.getmtime(path))
+            try:
+                new_mtime = int(os.path.getmtime(path))
+            except FileNotFoundError:
+                deletes.add(path)
+                continue
+
             if new_mtime != mtime:
                 # Changed since we logged this as something to be visited - revisit again later.
                 self.log(
@@ -123,10 +134,16 @@ class Walker:
             new_hash = self.calc_hash(path)
             if new_hash is None:
                 # Couldn't hash it - drop this file (don't record a visit to it)
+                deletes.add(path)
                 continue
 
             # Check mtime after hash calculated
-            new_mtime = int(os.path.getmtime(path))
+            try:
+                new_mtime = int(os.path.getmtime(path))
+            except FileNotFoundError:
+                deletes.add(path)
+                continue
+
             if new_mtime != mtime:
                 # Changed since we started calculating the hash - revisit when it might have settled
                 db.record_visit(self.db_conn, path, new_mtime + self.config.settle_time)
@@ -136,12 +153,30 @@ class Walker:
             # print("updating {} {} {}".format(path, mtime, now))
             db.update_file_data(self.db_conn, new_hash, path, mtime, now)
             db.record_visit(self.db_conn, path)
+
+        for path in deletes:
+            # Check file still doesn't exist
+            # Note - it's possible the file gets created between this check
+            # and the write to the db - this doesn't matter, because we'll
+            # get a file update notification if this happens, and guarantee
+            # to process that after the db has been updated, so there's no
+            # race condition here.
+            try:
+                new_mtime = int(os.path.getmtime(path))
+            except FileNotFoundError:
+                new_mtime = None
+            if new_mtime:
+                db.record_visit(self.db_conn, path, new_mtime + self.config.settle_time)
+                revisits_queued = True
+            else:
+                db.record_visit(self.db_conn, path, deleted=True)
+                db.update_deleted_file_data(self.db_conn, path, time.time())
+
         self.db_conn.commit()
         return revisits_queued
 
-    async def visit_symlinks(self, batch):
+    def visit_symlinks(self, batch):
         for path, mtime in batch:
-            await asyncio.sleep(0)
             self.log("symlink {} mtime={}".format(path, mtime))
 
     def listen(self):
@@ -151,6 +186,7 @@ class Walker:
         batches of either have been created.
 
         """
+        self.init_delete_batch_processing()
         self.init_file_batch_processing()
         self.init_symlink_batch_processing()
 
@@ -166,6 +202,9 @@ class Walker:
     async def process_change(self, path, stats):
         if path is None:
             return
+        if stats is None:
+            await self.add_to_delete_batch(path)
+            return
 
         mtime = int(stats.st_mtime)
 
@@ -175,6 +214,52 @@ class Walker:
             await self.add_to_symlink_batch(path, mtime)
         else:
             print("Unexpected change stats: {}".format(str(stats)))
+
+    def init_delete_batch_processing(self):
+        self.delete_batch = {}
+        self.delete_batch_time = None
+        self.delete_batch_cond = asyncio.Condition()
+        self.loop.create_task(self.start_polling_delete_batches())
+
+    async def add_to_delete_batch(self, path):
+        self.delete_batch[path] = None
+        if self.delete_batch_time is None:
+            self.delete_batch_time = time.time() + self.batch_timeout
+        if len(self.delete_batch) > self.batch_size:
+            await self.process_delete_batch()
+        async with self.delete_batch_cond:
+            self.delete_batch_cond.notify_all()
+
+    async def start_polling_delete_batches(self):
+        while True:
+            while self.delete_batch_time is not None:
+                wait_time = self.delete_batch_time - time.time()
+                if wait_time <= 0:
+                    await self.process_delete_batch()
+                else:
+                    self.log(
+                        "Next delete batch time: {} ({}s)".format(
+                            self.delete_batch_time, wait_time
+                        )
+                    )
+                    await asyncio.sleep(wait_time)
+            self.log("No delete batch due")
+            async with self.delete_batch_cond:
+                await self.delete_batch_cond.wait()
+
+    async def process_delete_batch(self):
+        print("processing delete batch size: {}".format(len(self.delete_batch)))
+        batch = self.delete_batch
+        self.delete_batch = {}
+        self.delete_batch_time = None
+        revisits_queued = self.visit_files(
+            sorted(batch.items())
+        ) or self.visit_symlinks(
+            sorted(batch.items())
+        )
+        if revisits_queued:
+            async with self.revisit_cond:
+                self.revisit_cond.notify_all()
 
     def init_file_batch_processing(self):
         self.file_batch = {}
@@ -257,7 +342,7 @@ class Walker:
         batch = self.symlink_batch
         self.symlink_batch = {}
         self.symlink_batch_time = None
-        await self.visit_symlinks(sorted(batch.items(), key=lambda x: (x[1], x[0])))
+        self.visit_symlinks(sorted(batch.items(), key=lambda x: (x[1], x[0])))
 
     def check_skip_dir(self, path, dirname):
         if path in self.config.exclude_paths:
@@ -319,8 +404,10 @@ class Walker:
                     self.log("Skipping {}".format(f_path))
                     continue
 
-                stats = os.stat(name, dir_fd=basefd, follow_symlinks=False)
-
+                try:
+                    stats = os.stat(name, dir_fd=basefd, follow_symlinks=False)
+                except FileNotFoundError:
+                    stats = None
                 await self.process_change(f_path, stats)
 
                 print(".", end="", flush=True)
@@ -348,7 +435,10 @@ class Walker:
             )
 
             for path in revisit_paths:
-                stats = os.stat(path, follow_symlinks=False)
+                try:
+                    stats = os.stat(path, follow_symlinks=False)
+                except FileNotFoundError:
+                    stats = None
                 await self.process_change(path, stats)
             else:
                 if next_revisit_time is None:
@@ -359,7 +449,14 @@ class Walker:
 
     def start_polling_changes(self):
         def process_inotify_event(event):
-            print("EVENT: {}".format(str(event)))
+            async def task():
+                print("EVENT: {}".format(str(event)))
+                try:
+                    stats = os.stat(event.pathname, follow_symlinks=False)
+                except FileNotFoundError:
+                    stats = None
+                await self.process_change(event.pathname, stats)
+            self.loop.create_task(task())
 
         self.notifier = pyinotify.AsyncioNotifier(
             self.watch_manager, self.loop, default_proc_fun=process_inotify_event

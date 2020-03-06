@@ -79,22 +79,29 @@ def clear_visits(connection):
         cursor.close()
 
 
-def record_visit(connection, path, revisit_time=None):
+def record_visit(connection, path, revisit_time=None, deleted=False):
     """Record a visit to a path.
-
-    This should only be called for paths which exist (though they may not have
-settled yet).
 
     """
     cursor = connection.cursor()
     try:
-        cursor.execute(
-            """
-            insert or replace into visits (path, revisit_time)
-            values(?, ?)
-        """,
-            (path, revisit_time),
-        )
+        if deleted:
+            cursor.execute(
+                """
+                delete from visits
+                where path = ?
+            """,
+                (path,),
+            )
+
+        else:
+            cursor.execute(
+                """
+                insert or replace into visits (path, revisit_time)
+                values(?, ?)
+            """,
+                (path, revisit_time),
+            )
     finally:
         cursor.close()
 
@@ -191,6 +198,33 @@ def update_file_data(connection, new_hash, path, mtime, now):
                 values(?, ?, ?, ?)
             """,
                 (new_hash, path, mtime, now),
+            )
+    finally:
+        cursor.close()
+
+def update_deleted_file_data(connection, path, now):
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            """
+            select rowid
+            from files
+            where path = ?
+            and deleted_before is null
+        """,
+            (path,),
+        )
+        rows = cursor.fetchall()
+        if len(rows) > 0:
+            assert len(rows) == 1
+            rowid = rows[0][0]
+
+            cursor.execute(
+                """
+                replace into files (rowid, deleted_before)
+                values(?, ?)
+            """,
+                (rowid, now),
             )
     finally:
         cursor.close()
