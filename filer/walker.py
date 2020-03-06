@@ -55,7 +55,8 @@ class Walker:
         return result.stdout.decode("utf8").strip().split("\n")
 
     def calc_hash(self, path):
-        # self.log("Calculating hash of {}".format(path))
+        self.log("Calculating hash of {}".format(path))
+        filesize = 0
         try:
             h = hashlib.sha512()
             with open(path, "rb") as fobj:
@@ -64,10 +65,11 @@ class Walker:
                     if len(d) == 0:
                         break
                     h.update(d)
-            return h.hexdigest()
+                    filesize += len(d)
+            return h.hexdigest(), filesize
         except PermissionError as e:
             self.log("PermissionError calculating hash for {} - skipping".format(path))
-            return None
+            return None, None
 
     def visit_files(self, batch):
         revisits_queued = False
@@ -131,7 +133,7 @@ class Walker:
                 revisits_queued = True
                 continue
 
-            new_hash = self.calc_hash(path)
+            new_hash, filesize = self.calc_hash(path)
             if new_hash is None:
                 # Couldn't hash it - drop this file (don't record a visit to it)
                 deletes.add(path)
@@ -151,7 +153,7 @@ class Walker:
                 continue
 
             # print("updating {} {} {}".format(path, mtime, now))
-            db.update_file_data(self.db_conn, new_hash, path, mtime, now)
+            db.update_file_data(self.db_conn, new_hash, filesize, path, mtime, now)
             db.record_visit(self.db_conn, path)
 
         for path in deletes:
@@ -390,6 +392,7 @@ class Walker:
                 else:
                     self.watch_manager.add_watch(d_path, self.watch_mask)
                 print("D", end="", flush=True)
+                # print();print(d_path)
 
             for dirname in skip:
                 self.log("Skipping {}".format(dirname))

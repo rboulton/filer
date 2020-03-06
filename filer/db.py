@@ -34,6 +34,7 @@ def init_schema(connection):
           hash text,
           path text,
           mtime integer,
+          filesize integer,
           first_observed integer,
           deleted_before integer
         );
@@ -48,8 +49,14 @@ def init_schema(connection):
         create index if not exists idx_current_file_hashes on files (
           hash,
           path,
-          mtime
+          mtime,
+          filesize
         ) where deleted_before is null;
+        """,
+        """
+        create index if not exists idx_file_hashes on files (
+          hash
+        )
         """,
         """
         create index if not exists idx_revisits on visits (
@@ -164,7 +171,7 @@ def get_current_file_data(connection, paths):
         cursor.close()
 
 
-def update_file_data(connection, new_hash, path, mtime, now):
+def update_file_data(connection, new_hash, filesize, path, mtime, now):
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -186,18 +193,18 @@ def update_file_data(connection, new_hash, path, mtime, now):
 
             cursor.execute(
                 """
-                replace into files (rowid, hash, path, mtime, first_observed)
-                values(?, ?, ?, ?, ?)
+                replace into files (rowid, hash, filesize, path, mtime, first_observed)
+                values(?, ?, ?, ?, ?, ?)
             """,
-                (rowid, new_hash, path, mtime, old_first_observed),
+                (rowid, new_hash, filesize, path, mtime, old_first_observed),
             )
         else:
             cursor.execute(
                 """
-                insert into files (hash, path, mtime, first_observed)
-                values(?, ?, ?, ?)
+                insert into files (hash, filesize, path, mtime, first_observed)
+                values(?, ?, ?, ?, ?)
             """,
-                (new_hash, path, mtime, now),
+                (new_hash, filesize, path, mtime, now),
             )
     finally:
         cursor.close()
