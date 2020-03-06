@@ -2,7 +2,7 @@ import sqlite3
 import urllib.parse
 import os
 
-DB_FILENAME = "db.sql"
+DB_FILENAME = "db.sqlite"
 
 
 def uri(path, read_only):
@@ -202,29 +202,18 @@ def update_file_data(connection, new_hash, path, mtime, now):
     finally:
         cursor.close()
 
+
 def update_deleted_file_data(connection, path, now):
     cursor = connection.cursor()
     try:
         cursor.execute(
             """
-            select rowid
-            from files
-            where path = ?
-            and deleted_before is null
-        """,
-            (path,),
-        )
-        rows = cursor.fetchall()
-        if len(rows) > 0:
-            assert len(rows) == 1
-            rowid = rows[0][0]
-
-            cursor.execute(
-                """
-                replace into files (rowid, deleted_before)
-                values(?, ?)
+                update files
+                set deleted_before = ?
+                where path = ?
+                and deleted_before is null
             """,
-                (rowid, now),
-            )
+            (now, path,),
+        )
     finally:
         cursor.close()

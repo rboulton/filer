@@ -254,9 +254,7 @@ class Walker:
         self.delete_batch_time = None
         revisits_queued = self.visit_files(
             sorted(batch.items())
-        ) or self.visit_symlinks(
-            sorted(batch.items())
-        )
+        ) or self.visit_symlinks(sorted(batch.items()))
         if revisits_queued:
             async with self.revisit_cond:
                 self.revisit_cond.notify_all()
@@ -456,6 +454,7 @@ class Walker:
                 except FileNotFoundError:
                     stats = None
                 await self.process_change(event.pathname, stats)
+
             self.loop.create_task(task())
 
         self.notifier = pyinotify.AsyncioNotifier(
