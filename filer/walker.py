@@ -411,6 +411,11 @@ class Walker:
                 print(".", end="", flush=True)
 
         try:
+            d_path = os.path.normpath(os.path.realpath(root))
+            if os.path.isdir(d_path):
+                if not self.check_skip_dir(d_path, os.path.basename(d_path)):
+                    self.watch_manager.add_watch(d_path, self.watch_mask)
+
             for base, dirs, files, basefd in os.fwalk(root, follow_symlinks=False):
                 await watch_dir(base, dirs, files, basefd)
         except FileNotFoundError as e:
