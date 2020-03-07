@@ -135,8 +135,10 @@ class Walker:
 
             new_hash, filesize = self.calc_hash(path)
             if new_hash is None:
-                # Couldn't hash it - drop this file (don't record a visit to it)
-                deletes.add(path)
+                # Couldn't hash it - drop this file
+                self.log("file {} couldn't be hashed - treat as absent".format(path))
+                db.record_visit(self.db_conn, path, deleted=True)
+                db.update_deleted_file_data(self.db_conn, path, time.time())
                 continue
 
             # Check mtime after hash calculated
