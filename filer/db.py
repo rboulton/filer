@@ -151,7 +151,35 @@ def due_for_revisit(connection, now):
     return due, next_revisit_time
 
 
+def get_unvisited_files(connection):
+    """Return an iterator over paths which exist in the DB but haven't been visited yet.
+
+    """
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            """
+            select files.path
+            from files
+            left outer join visits
+            on files.path = visits.path
+            where visits.path is null
+            and files.deleted_before is null
+            order by files.hash asc
+        """
+        )
+        while True:
+            items = cursor.fetchmany()
+            if len(items) == 0:
+                break
+            for item in items:
+                yield item[0]
+    finally:
+        cursor.close()
+
+
 def get_current_file_data(connection, paths):
+    print("Get current: %r" % (paths,))
     cursor = connection.cursor()
     try:
         args = ", ".join(["?"] * len(paths))

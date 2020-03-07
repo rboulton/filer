@@ -165,6 +165,7 @@ class Walker:
             # get a file update notification if this happens, and guarantee
             # to process that after the db has been updated, so there's no
             # race condition here.
+            print("Processing delete: {}".format(path))
             try:
                 new_mtime = int(os.path.getmtime(path))
             except FileNotFoundError:
@@ -381,6 +382,10 @@ class Walker:
         db.clear_visits(self.db_conn)
         for root in self.config.roots:
             await self.watch_tree(root)
+
+        for path in db.get_unvisited_files(self.db_conn):
+            print(path)
+            await self.process_change(path, None)
 
     async def watch_tree(self, root):
         self.log("Checking files under {}".format(root))
