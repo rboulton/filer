@@ -5,7 +5,10 @@ import os
 DB_FILENAME = "db.sqlite"
 
 
-def uri(path, read_only):
+def db_uri(path, read_only):
+    '''Calculate the database URI
+
+    '''
     uri = "file:{}".format(urllib.parse.quote(path))
     if read_only:
         return uri + "?mode=ro"
@@ -13,6 +16,9 @@ def uri(path, read_only):
 
 
 def connect(config, read_only=True):
+    '''Connect to the database
+
+    '''
     db_dir = config.db_dir
     db_path = os.path.join(db_dir, DB_FILENAME)
 
@@ -20,7 +26,7 @@ def connect(config, read_only=True):
         if not os.path.exists(db_dir):
             os.makedirs(db_dir)
 
-    return sqlite3.connect(uri(db_path, read_only), uri=True)
+    return sqlite3.connect(db_uri(db_path, read_only), uri=True)
 
 
 def init_schema(connection):
