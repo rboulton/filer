@@ -135,8 +135,10 @@ class Walker:
 
             new_hash, filesize = self.calc_hash(path)
             if new_hash is None:
-                # Couldn't hash it - drop this file (don't record a visit to it)
-                deletes.add(path)
+                # Couldn't hash it - drop this file
+                self.log("file {} couldn't be hashed - treat as absent".format(path))
+                db.record_visit(self.db_conn, path, deleted=True)
+                db.update_deleted_file_data(self.db_conn, path, time.time())
                 continue
 
             # Check mtime after hash calculated
@@ -163,6 +165,7 @@ class Walker:
             # get a file update notification if this happens, and guarantee
             # to process that after the db has been updated, so there's no
             # race condition here.
+            print("Processing delete: {}".format(path))
             try:
                 new_mtime = int(os.path.getmtime(path))
             except FileNotFoundError:
@@ -379,6 +382,10 @@ class Walker:
         db.clear_visits(self.db_conn)
         for root in self.config.roots:
             await self.watch_tree(root)
+
+        for path in db.get_unvisited_files(self.db_conn):
+            print(path)
+            await self.process_change(path, None)
 
     async def watch_tree(self, root):
         self.log("Checking files under {}".format(root))
