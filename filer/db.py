@@ -6,9 +6,7 @@ DB_FILENAME = "db.sqlite"
 
 
 def db_uri(path, read_only):
-    '''Calculate the database URI
-
-    '''
+    """Calculate the database URI"""
     uri = "file:{}".format(urllib.parse.quote(path))
     if read_only:
         return uri + "?mode=ro"
@@ -16,9 +14,7 @@ def db_uri(path, read_only):
 
 
 def connect(config, read_only=True):
-    '''Connect to the database
-
-    '''
+    """Connect to the database"""
     db_dir = config.db_dir
     db_path = os.path.join(db_dir, DB_FILENAME)
 
@@ -93,9 +89,7 @@ def clear_visits(connection):
 
 
 def record_visit(connection, path, revisit_time=None, deleted=False):
-    """Record a visit to a path.
-
-    """
+    """Record a visit to a path."""
     cursor = connection.cursor()
     try:
         if deleted:
@@ -158,9 +152,7 @@ def due_for_revisit(connection, now):
 
 
 def get_unvisited_files(connection):
-    """Return an iterator over paths which exist in the DB but haven't been visited yet.
-
-    """
+    """Return an iterator over paths which exist in the DB but haven't been visited yet."""
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -254,7 +246,10 @@ def update_deleted_file_data(connection, path, now):
                 where path = ?
                 and deleted_before is null
             """,
-            (now, path,),
+            (
+                now,
+                path,
+            ),
         )
     finally:
         cursor.close()
