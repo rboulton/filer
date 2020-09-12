@@ -42,7 +42,12 @@ def load_config_from_path(path):
         data = json.load(fobj)
 
     datadir = data.pop("datadir", None)
-    roots = data.pop("roots", ["/",])
+    roots = data.pop(
+        "roots",
+        [
+            "/",
+        ],
+    )
     check_list_of_strings(roots, "roots")
 
     excludes = data.pop("exclude", {})
