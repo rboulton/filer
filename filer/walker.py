@@ -58,7 +58,7 @@ class Walker:
         self.log("Calculating hash of {}".format(path))
         filesize = 0
         try:
-            h = hashlib.sha512()
+            h = hashlib.sha256()
             with open(path, "rb") as fobj:
                 while True:
                     d = fobj.read(1024 * 128)
