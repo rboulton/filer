@@ -32,13 +32,25 @@ def init_schema(connection):
         pragma journal_mode=WAL;
         """,
         """
+        create table if not exists dirs (
+          id integer primary key autoincrement,
+          path text unique,
+          parent_id integer,
+          first_observed integer,
+          deleted_before integer,
+          foreign key(parent_id) references dirs(id)
+        );
+        """,
+        """
         create table if not exists files (
           hash text,
           path text,
+          dir_id integer,
           mtime integer,
           filesize integer,
           first_observed integer,
-          deleted_before integer
+          deleted_before integer,
+          foreign key(dir_id) references dirs(id)
         );
         """,
         """
@@ -67,6 +79,7 @@ def init_schema(connection):
         ) where revisit_time is not null;
     """,
     ):
+        print(sql)
         cursor.execute(sql)
 
     cursor.close()
@@ -197,12 +210,46 @@ def get_current_file_data(connection, paths):
         cursor.close()
 
 
+def _update_dir_data(cursor, path, now):
+    """Ensure that there's a record of a directory existing now, and return its id.
+
+    """
+    is_root = (path == '/' or path == '')
+    cursor.execute(
+        """
+        select id, parent_id, first_observed
+        from dirs
+        where path = ?
+        and deleted_before is null
+    """,
+    (path,),
+    )
+    rows = cursor.fetchall()
+    if len(rows) > 0:
+        assert len(rows) == 1
+        old_dir_id, _, _ = rows[0]
+        return old_dir_id
+    else:
+        if is_root:
+            parent_id = None
+        else:
+            parent_path = os.path.dirname(path)
+            parent_id = _update_dir_data(cursor, parent_path, now)
+        cursor.execute(
+            """
+            insert into dirs (path, parent_id, first_observed)
+            values(?, ?, ?)
+        """,
+            (path, parent_id, now),
+        )
+        return cursor.lastrowid
+
 def update_file_data(connection, new_hash, filesize, path, mtime, now):
     cursor = connection.cursor()
     try:
         cursor.execute(
             """
-            select rowid, hash, mtime, first_observed
+            select rowid, hash, mtime, first_observed, dir_id
             from files
             where path = ?
             and deleted_before is null
@@ -212,25 +259,31 @@ def update_file_data(connection, new_hash, filesize, path, mtime, now):
         rows = cursor.fetchall()
         if len(rows) > 0:
             assert len(rows) == 1
-            rowid, old_hash, old_mtime, old_first_observed = rows[0]
-            if old_hash == new_hash and old_mtime == mtime:
+            rowid, old_hash, old_mtime, old_first_observed, old_dir_id = rows[0]
+            dir_path = os.path.dirname(path)
+            dir_id = _update_dir_data(cursor, dir_path, now)
+
+            if old_hash == new_hash and old_mtime == mtime and dir_id == old_dir_id:
                 # print("Nothing to change")
                 return
 
             cursor.execute(
                 """
-                replace into files (rowid, hash, filesize, path, mtime, first_observed)
+                replace into files (rowid, hash, filesize, path, mtime, first_observed, dir_id)
                 values(?, ?, ?, ?, ?, ?)
             """,
-                (rowid, new_hash, filesize, path, mtime, old_first_observed),
+                (rowid, new_hash, filesize, path, mtime, old_first_observed, dir_id),
             )
         else:
+            dir_path = os.path.dirname(path)
+            dir_id = _update_dir_data(cursor, dir_path, now)
+
             cursor.execute(
                 """
-                insert into files (hash, filesize, path, mtime, first_observed)
-                values(?, ?, ?, ?, ?)
+                insert into files (hash, filesize, path, mtime, first_observed, dir_id)
+                values(?, ?, ?, ?, ?, ?)
             """,
-                (new_hash, filesize, path, mtime, now),
+                (new_hash, filesize, path, mtime, now, dir_id),
             )
     finally:
         cursor.close()
