@@ -15,7 +15,8 @@ help:
 	@echo "Filer build instructions"
 	@echo
 	@echo "make test - run tests (builds and formats first)"
-	@echo "make run - run server"
+	@echo "make run_monitor - run file monitor"
+	@echo "make run_fs - run file system"
 	@echo "make build - install and prepare dependencies"
 	@echo "make clean - reset to initial state"
 	@echo "make format - format the code"
@@ -40,8 +41,11 @@ $(DEV_REQUIREMENTS_STAMPFILE): $(REQUIREMENTS_STAMPFILE) dev_requirements.txt
 test: build $(DEV_REQUIREMENTS_STAMPFILE)
 	$(VENV_PYTEST) filer
 
-run: build
+run_monitor: build
 	$(VENV_PYTHON) filer.py
+
+run_fs: build
+	$(VENV_PYTHON) filerfs.py files
 
 build: $(REQUIREMENTS_STAMPFILE)
 
